@@ -60,10 +60,12 @@ export function MeasurementOverlay({
     return () => ro.disconnect();
   }, [imageRef, updateRects]);
 
-  // Length: [start] then [start, end]
-  const [lengthPoints, setLengthPoints] = useState<{ x: number; y: number }[] | null>(null);
-  // Angle: [vertex], then [vertex, ray1], then [vertex, ray1, ray2Preview]
-  const [anglePoints, setAnglePoints] = useState<{ x: number; y: number }[] | null>(null);
+  // Length: [start] - one committed point, preview tracked separately
+  const [lengthStart, setLengthStart] = useState<{ x: number; y: number } | null>(null);
+  // Angle: [vertex] or [vertex, ray1End] - committed points only
+  const [angleCommitted, setAngleCommitted] = useState<{ x: number; y: number }[] | null>(null);
+  // Preview point for Length and Angle (cursor position during drawing)
+  const [previewPoint, setPreviewPoint] = useState<{ x: number; y: number } | null>(null);
   // ROI: start point + current size (for rectangle/ellipse drag)
   const [roiStart, setRoiStart] = useState<{ x: number; y: number } | null>(null);
   const [roiCurrent, setRoiCurrent] = useState<{ x: number; y: number } | null>(null);
@@ -75,11 +77,13 @@ export function MeasurementOverlay({
       const pt = screenToNormalized(e.clientX, e.clientY, imgRect);
 
       if (activeTool === 'Length') {
-        if (!lengthPoints) {
-          setLengthPoints([pt, pt]);
+        if (!lengthStart) {
+          // First click: set start point
+          setLengthStart(pt);
+          setPreviewPoint(pt);
         } else {
-          const [p1] = lengthPoints;
-          const geom: LengthGeometry = { kind: 'length', x1: p1.x, y1: p1.y, x2: pt.x, y2: pt.y };
+          // Second click: complete the measurement
+          const geom: LengthGeometry = { kind: 'length', x1: lengthStart.x, y1: lengthStart.y, x2: pt.x, y2: pt.y };
           const meta = await getInstanceMetadata(imageId);
           const value = meta ? computeLengthMm(geom, meta) : 0;
           onComplete({
@@ -92,18 +96,24 @@ export function MeasurementOverlay({
             imageId,
             geometry: geom,
           });
-          setLengthPoints(null);
+          setLengthStart(null);
+          setPreviewPoint(null);
         }
         return;
       }
 
       if (activeTool === 'Angle') {
-        if (!anglePoints || anglePoints.length === 0) {
-          setAnglePoints([pt]);
-        } else if (anglePoints.length === 1) {
-          setAnglePoints([anglePoints[0], pt]);
+        if (!angleCommitted || angleCommitted.length === 0) {
+          // First click: set vertex
+          setAngleCommitted([pt]);
+          setPreviewPoint(pt);
+        } else if (angleCommitted.length === 1) {
+          // Second click: set first ray end
+          setAngleCommitted([angleCommitted[0], pt]);
+          setPreviewPoint(pt);
         } else {
-          const [v, p1] = anglePoints;
+          // Third click: complete the measurement
+          const [v, p1] = angleCommitted;
           const geom: AngleGeometry = { kind: 'angle', vx: v.x, vy: v.y, x1: p1.x, y1: p1.y, x2: pt.x, y2: pt.y };
           const deg = computeAngleDegrees(geom);
           onComplete({
@@ -116,7 +126,8 @@ export function MeasurementOverlay({
             imageId,
             geometry: geom,
           });
-          setAnglePoints(null);
+          setAngleCommitted(null);
+          setPreviewPoint(null);
         }
         return;
       }
@@ -129,22 +140,20 @@ export function MeasurementOverlay({
         return;
       }
     },
-    [isMeasurementTool, imgRect, imageId, activeTool, lengthPoints, anglePoints, roiStart, viewportIndex, onComplete]
+    [isMeasurementTool, imgRect, imageId, activeTool, lengthStart, angleCommitted, roiStart, viewportIndex, onComplete]
   );
 
   const handlePointerMove = useCallback(
     (e: React.PointerEvent) => {
       if (!imgRect) return;
       const pt = screenToNormalized(e.clientX, e.clientY, imgRect);
-      if (lengthPoints && lengthPoints.length === 1) {
-        setLengthPoints([lengthPoints[0], pt]);
-      }
-      if (anglePoints && anglePoints.length >= 2) {
-        setAnglePoints([anglePoints[0], anglePoints[1], pt]);
+      // Update preview point for Length and Angle tools
+      if (lengthStart || angleCommitted) {
+        setPreviewPoint(pt);
       }
       if (roiStart) setRoiCurrent(pt);
     },
-    [imgRect, lengthPoints, anglePoints, roiStart]
+    [imgRect, lengthStart, angleCommitted, roiStart]
   );
 
   const handlePointerUp = useCallback(
@@ -193,7 +202,7 @@ export function MeasurementOverlay({
   );
 
   const visibleMeasurements = measurements.filter(
-    (m) => m.viewportIndex === viewportIndex && (m.imageId === imageId || !m.imageId)
+    (m) => m.imageId === imageId
   );
 
   const showOverlay = isMeasurementTool || visibleMeasurements.length > 0;
@@ -311,44 +320,135 @@ export function MeasurementOverlay({
             return null;
           })}
 
-          {/* Draft: length line */}
-          {activeTool === 'Length' && lengthPoints && (
+          {/* Draft: length line with start point indicator */}
+          {activeTool === 'Length' && lengthStart && previewPoint && (
             <g>
+              {/* Start point indicator - always visible */}
+              <circle
+                cx={lengthStart.x}
+                cy={lengthStart.y}
+                r={0.012}
+                fill="#22c55e"
+                fillOpacity={0.3}
+                stroke="#22c55e"
+                strokeWidth={0.003}
+              />
+              <circle
+                cx={lengthStart.x}
+                cy={lengthStart.y}
+                r={0.005}
+                fill="#22c55e"
+              />
+              {/* Preview line from start to current cursor position */}
               <line
-                x1={lengthPoints[0].x}
-                y1={lengthPoints[0].y}
-                x2={lengthPoints[1].x}
-                y2={lengthPoints[1].y}
+                x1={lengthStart.x}
+                y1={lengthStart.y}
+                x2={previewPoint.x}
+                y2={previewPoint.y}
                 stroke="#22c55e"
                 strokeWidth={0.004}
                 strokeDasharray="0.01 0.01"
               />
+              {/* End point indicator (current cursor position) */}
+              <circle
+                cx={previewPoint.x}
+                cy={previewPoint.y}
+                r={0.008}
+                fill="none"
+                stroke="#22c55e"
+                strokeWidth={0.003}
+                strokeDasharray="0.006 0.006"
+              />
             </g>
           )}
 
-          {/* Draft: angle (vertex, then ray1, then ray2 preview) */}
-          {activeTool === 'Angle' && anglePoints && anglePoints.length >= 1 && (
+          {/* Draft: angle with vertex and ray indicators */}
+          {activeTool === 'Angle' && angleCommitted && angleCommitted.length >= 1 && previewPoint && (
             <g>
-              {anglePoints.length >= 2 && (
-                <line
-                  x1={anglePoints[0].x}
-                  y1={anglePoints[0].y}
-                  x2={anglePoints[1].x}
-                  y2={anglePoints[1].y}
-                  stroke="#06b6d4"
-                  strokeWidth={0.004}
-                />
+              {/* Vertex indicator - always visible once placed */}
+              <circle
+                cx={angleCommitted[0].x}
+                cy={angleCommitted[0].y}
+                r={0.015}
+                fill="#06b6d4"
+                fillOpacity={0.3}
+                stroke="#06b6d4"
+                strokeWidth={0.003}
+              />
+              <circle
+                cx={angleCommitted[0].x}
+                cy={angleCommitted[0].y}
+                r={0.006}
+                fill="#06b6d4"
+              />
+              {/* First ray: preview (dashed) when length=1, solid when length=2 */}
+              {angleCommitted.length === 1 && (
+                <>
+                  {/* Preview line from vertex to cursor */}
+                  <line
+                    x1={angleCommitted[0].x}
+                    y1={angleCommitted[0].y}
+                    x2={previewPoint.x}
+                    y2={previewPoint.y}
+                    stroke="#06b6d4"
+                    strokeWidth={0.004}
+                    strokeDasharray="0.01 0.01"
+                  />
+                  {/* Cursor indicator */}
+                  <circle
+                    cx={previewPoint.x}
+                    cy={previewPoint.y}
+                    r={0.008}
+                    fill="none"
+                    stroke="#06b6d4"
+                    strokeWidth={0.003}
+                    strokeDasharray="0.006 0.006"
+                  />
+                </>
               )}
-              {anglePoints.length >= 3 && (
-                <line
-                  x1={anglePoints[0].x}
-                  y1={anglePoints[0].y}
-                  x2={anglePoints[2].x}
-                  y2={anglePoints[2].y}
-                  stroke="#06b6d4"
-                  strokeWidth={0.004}
-                  strokeDasharray="0.01 0.01"
-                />
+              {/* First ray committed (solid), second ray preview (dashed) */}
+              {angleCommitted.length >= 2 && (
+                <>
+                  {/* First ray - solid */}
+                  <line
+                    x1={angleCommitted[0].x}
+                    y1={angleCommitted[0].y}
+                    x2={angleCommitted[1].x}
+                    y2={angleCommitted[1].y}
+                    stroke="#06b6d4"
+                    strokeWidth={0.004}
+                  />
+                  {/* First ray endpoint indicator */}
+                  <circle
+                    cx={angleCommitted[1].x}
+                    cy={angleCommitted[1].y}
+                    r={0.008}
+                    fill="#06b6d4"
+                    fillOpacity={0.5}
+                    stroke="#06b6d4"
+                    strokeWidth={0.002}
+                  />
+                  {/* Second ray preview - dashed */}
+                  <line
+                    x1={angleCommitted[0].x}
+                    y1={angleCommitted[0].y}
+                    x2={previewPoint.x}
+                    y2={previewPoint.y}
+                    stroke="#06b6d4"
+                    strokeWidth={0.004}
+                    strokeDasharray="0.01 0.01"
+                  />
+                  {/* Second ray cursor indicator */}
+                  <circle
+                    cx={previewPoint.x}
+                    cy={previewPoint.y}
+                    r={0.008}
+                    fill="none"
+                    stroke="#06b6d4"
+                    strokeWidth={0.003}
+                    strokeDasharray="0.006 0.006"
+                  />
+                </>
               )}
             </g>
           )}
