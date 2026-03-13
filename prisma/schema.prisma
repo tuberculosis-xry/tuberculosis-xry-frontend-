@@ -1,0 +1,170 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
+// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
+
+generator client {
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "linux-musl-openssl-3.0.x", "debian-openssl-3.0.x"]
+}
+
+datasource db {
+  provider = "mongodb"
+  url      = env("DATABASE_URL")
+}
+
+model TuberculosisDiagnosis {
+  id              String   @id @default(auto()) @map("_id") @db.ObjectId
+  timestamp       DateTime @default(now())
+  image           Bytes
+  class           String   @default("normal")
+  userId          String   // Firebase UID of the user who ran the scan
+  confidenceScore Float    // 0–1 from model
+  patientName     String?  // from DICOM or label
+  patientId       String?  // DICOM Patient ID
+  patientSex      String?  // DICOM Patient Sex (M/F/O)
+  patientBirthDate String? // DICOM Patient Birth Date (YYYYMMDD)
+  studyDate       String?  // DICOM Study Date (YYYYMMDD)
+  studyTime       String?  // DICOM Study Time (optional)
+
+  @@index([userId], name: "idx_userId")
+  @@index([timestamp(sort: Desc)], name: "idx_timestamp")
+  @@index([userId, timestamp(sort: Desc)], name: "idx_userId_timestamp")
+}
+
+/// models for NextAuth.js / auth
+
+model User {
+  id            String    @id @default(auto()) @map("_id") @db.ObjectId
+  name          String?
+  email         String?   @unique
+  emailVerified DateTime?
+  image         String?
+  password      String?
+}
+
+// model Account {
+//   id                 Int       @id @default(autoincrement())
+//   userId             Int
+//   type               String
+//   provider           String
+//   providerAccountId  String
+//   refresh_token      String?
+//   access_token       String?
+//   expires_at         Int?
+//   token_type         String?
+//   scope              String?
+//   id_token           String?
+//   session_state      String?
+//
+//   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+//
+//   @@unique([provider, providerAccountId])
+// }
+
+// model Session {
+//   id           Int       @id @default(autoincrement())
+//   sessionToken String    @unique
+//   userId       Int
+//   expires      DateTime
+//
+//   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+// }
+
+model VerificationToken {
+  id         String   @id @default(auto()) @map("_id") @db.ObjectId
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+/// OHIF Study List — patient/study details (all from DB, no hardcoded list)
+model OhifStudy {
+  id                String   @id @default(auto()) @map("_id") @db.ObjectId
+  studyInstanceUID  String   @unique
+  patientName       String
+  patientId         String
+  mrn               String
+  studyDate         String
+  studyTime         String?  // e.g. "14:05" or "02:05 PM"
+  studyDescription  String
+  modality          String
+  accessionNumber   String
+  instances         Int
+  seriesCount       Int?    // from instance store when known; null if not yet computed
+  availableModes    String[] // e.g. ["basic", "segmentation", "tmtv"]
+  patientSex        String?  // M / F / O
+  patientBirthDate  String?  // YYYY-MM-DD
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@index([mrn])
+  @@index([patientName])
+  @@index([studyDate])
+}
+
+/// OHIF DICOM instances — raw DICOM bytes per instance (no PACS). One doc per SOP instance.
+model OhifInstance {
+  id                 String   @id @default(auto()) @map("_id") @db.ObjectId
+  studyInstanceUID   String
+  seriesInstanceUID  String
+  sopInstanceUID     String   @unique
+  patientId          String
+  mrn                String
+  instanceNumber     Int
+  dicomBytes         Bytes
+  createdAt          DateTime @default(now())
+
+  @@index([studyInstanceUID])
+  @@index([seriesInstanceUID])
+  @@index([studyInstanceUID, seriesInstanceUID])
+  @@index([mrn])
+}
+
+/// Per-instance DICOM viewport annotations (drawings, shapes, comments, marks).
+/// One record per (study, series, sop, user). Edits are stored as JSON payload; save overwrites.
+model OhifViewportAnnotation {
+  id                 String   @id @default(auto()) @map("_id") @db.ObjectId
+  studyInstanceUID   String
+  seriesInstanceUID  String
+  sopInstanceUID     String
+  userId             String   // Firebase UID of the user who created/saved
+  payload            String   // JSON array of annotation items (normalized coords 0-1)
+  createdAt          DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@unique([studyInstanceUID, seriesInstanceUID, sopInstanceUID, userId])
+  @@index([studyInstanceUID])
+  @@index([userId])
+}
+
+/// Stored measurement reports (STOW "store back") — when user sends measurements to storage.
+/// Persists to app DB; optional forward to PACS STOW can be added later.
+model OhifMeasurementReport {
+  id                String   @id @default(auto()) @map("_id") @db.ObjectId
+  studyInstanceUID  String
+  userId            String   // Firebase UID of the user who sent
+  payload           String   // JSON: { measurements: Measurement[] }
+  createdAt         DateTime @default(now())
+
+  @@index([studyInstanceUID])
+  @@index([userId])
+}
+
+/// Saved measurements per study + user (Save button). One record per (study, user); overwritten on each Save.
+/// Payload = full Measurement[] JSON including geometry and imageId for re-draw on canvas.
+model OhifSavedMeasurements {
+  id                String   @id @default(auto()) @map("_id") @db.ObjectId
+  studyInstanceUID  String
+  userId            String
+  payload           String   // JSON: full Measurement[] with geometry, imageId
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@unique([studyInstanceUID, userId])
+  @@index([studyInstanceUID])
+  @@index([userId])
+}

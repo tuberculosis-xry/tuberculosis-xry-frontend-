@@ -1,0 +1,7 @@
+# Allow all crawlers
+User-agent: *
+Allow: /
+
+# Block all crawlers for /dashboard
+User-agent: *
+Disallow: /dashboard
