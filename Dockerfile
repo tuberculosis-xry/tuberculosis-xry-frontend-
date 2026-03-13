@@ -41,6 +41,9 @@ WORKDIR /app
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
 
+# Install openssl (required by Prisma)
+RUN apt-get update && apt-get install -y openssl && rm -rf /var/lib/apt/lists/*
+
 # Create non-root user
 RUN useradd -m nextjs
 
@@ -48,6 +51,12 @@ RUN useradd -m nextjs
 COPY --from=builder --chown=nextjs:nextjs /app/.next/standalone ./
 COPY --from=builder --chown=nextjs:nextjs /app/.next/static ./.next/static
 COPY --from=builder --chown=nextjs:nextjs /app/public ./public
+
+# Copy Prisma schema and generated client (required for query engine)
+COPY --from=builder --chown=nextjs:nextjs /app/node_modules/.prisma ./node_modules/.prisma
+COPY --from=builder --chown=nextjs:nextjs /app/node_modules/@prisma ./node_modules/@prisma
+COPY --from=builder --chown=nextjs:nextjs /app/prisma ./prisma
+
 
 USER nextjs
 
